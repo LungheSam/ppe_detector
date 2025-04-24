@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VSCode or other IDEs
+.vscode/
+.idea/
+
+# Environment files
+.env
+.venv/
+env/
+venv/
+*.env
+
+# Logs and output files
+*.log
+*.csv
+*.out
+*.tmp
+
+# YOLO model weights and datasets
+*.pt
+runs/
+datasets/
+
+# Output images and screenshots
+computer_vision/out.jpg
+computer_vision/logs/
+
+# Mac & Linux system files
+.DS_Store
+
+# Windows system files
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Test artifacts
+*.bak
+*.swp
+*.swo
+
+# Ignore pip wheels and build/dist
+*.whl
+build/
+dist/
+*.egg-info/
+
+# Ignore SMS secrets or config
+sms_alerts/credentials.json
+
+
+# Arduino serial communication temporary files
+utils/serial_comm/__pycache__/
+
+# Ignore camera cache (if any)
+camera_cache/
