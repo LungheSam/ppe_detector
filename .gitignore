@@ -52,7 +52,7 @@ dist/
 
 # Ignore SMS secrets or config
 sms_alerts/credentials.json
-
+serviceAccountKey.json
 
 # Arduino serial communication temporary files
 utils/serial_comm/__pycache__/
