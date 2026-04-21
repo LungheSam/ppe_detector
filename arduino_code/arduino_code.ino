@@ -168,10 +168,9 @@ void accessDenied() {
   // Red LED pattern (error)
   for (int i = 0; i < 3; i++) {
     digitalWrite(LED_RED, HIGH);
-    tone(BUZZER_PIN, 1000, 200);
+    tone(BUZZER_PIN, 1000, 1500);
     delay(200);
     digitalWrite(LED_RED, LOW);
-    noTone(BUZZER_PIN);
     delay(100);
   }
   
@@ -196,12 +195,12 @@ void cardValidFeedback() {
  */
 void cardInvalidFeedback() {
   digitalWrite(LED_RED, HIGH);
-  tone(BUZZER_PIN, 300, 200);
+  tone(BUZZER_PIN, 700, 200);
   delay(200);
   digitalWrite(LED_RED, LOW);
   delay(100);
   digitalWrite(LED_RED, HIGH);
-  tone(BUZZER_PIN, 300, 200);
+  tone(BUZZER_PIN, 700, 200);
   delay(200);
   digitalWrite(LED_RED, LOW);
 }

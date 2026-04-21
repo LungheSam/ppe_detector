@@ -8,7 +8,7 @@ import pyttsx3
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ultralytics import YOLO
-from firebase.firebase_logger import log_to_firebase
+from firebase.firebase_logger import log_to_firebase, log_ppe_photo_to_firebase
 from utils.serial_comm import send_to_arduino, read_from_arduino, check_rfid_card
 
 # ============== TEXT TO SPEECH SETUP ==============
@@ -44,7 +44,7 @@ if not cap.isOpened():
     exit(1)
 
 # ============== PPE CONFIGURATION ==============
-REQUIRED_PPE = ['Helmet', 'Safety Vest']  # Helmet and Vest required
+REQUIRED_PPE = ['Safety Vest']  # Only Safety Vest required
 
 # ============== SYSTEM VARIABLES ==============
 state = STATE_WAITING_FOR_RFID
@@ -53,8 +53,9 @@ ppe_check_start = None
 current_card_uid = None
 current_user_name = None
 ppe_check_passed = False
+ppe_retry_count = 0  # Track PPE retry attempts (max 2 chances)
 
-window_duration = 5      # seconds to verify PPE
+window_duration = 9      # seconds to verify PPE
 reposition_delay = 6     # seconds to reposition
 
 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -66,7 +67,8 @@ def check_ppe_compliance(detected):
 
 print("="*60)
 print("PPE Detection System Started (RFID Triggered Mode)")
-print("Required PPE: Helmet and Safety Vest")
+print("Required PPE: Safety Vest Only")
+print("PPE Chances: 2 attempts allowed")
 print("Press 'q' to quit")
 print("="*60)
 
@@ -106,6 +108,7 @@ while True:
         
         if is_valid:
             current_user_name = user_name
+            ppe_retry_count = 0  # Reset retry counter for new user
             # Log card acceptance
             log_to_firebase('CARD_ACCEPTED', f"Card accepted for {user_name}", current_card_uid, user_name)
             speak(f"Card accepted. Welcome {user_name}. Please step in front of the camera.")
@@ -158,11 +161,11 @@ while True:
         if time.time() - reposition_start >= reposition_delay:
             print("⏳ Starting PPE detection process...")
             state = STATE_CHECK_FOR_PPE
-            ppe_check_start = None
-            speak("Checking your equipment. Please stay still. Required: Helmet and Safety Vest.")
+            ppe_check_start = None  # Will be set immediately when entering state
+            speak("Checking your equipment. Please stay still. Required: Safety Vest.")
 
     elif state == STATE_CHECK_FOR_PPE:
-        display_text = f"Checking for required PPE: {', '.join(REQUIRED_PPE)}"
+        display_text = f"Checking for required PPE: {', '.join(REQUIRED_PPE)} (Attempt {ppe_retry_count + 1}/2)"
         cv2.putText(frame, display_text, (30, 30), font, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
         
         # Check if person is still present
@@ -175,6 +178,15 @@ while True:
         
         # Check PPE compliance
         ppe_ok, missing_ppe = check_ppe_compliance(detected)
+        
+        # FIX: Start timer immediately when entering this state
+        if ppe_check_start is None:
+            print("⏳ Starting PPE verification timer (5 seconds)...")
+            ppe_check_start = time.time()
+            speak("You have 5 seconds to show your safety vest.")
+        
+        # Calculate elapsed time
+        elapsed = time.time() - ppe_check_start
         
         # Show missing items
         if missing_ppe:
@@ -190,17 +202,20 @@ while True:
             for i, item in enumerate(detected[:5]):
                 cv2.putText(frame, f"- {item}", (30, y_offset + (i+1)*25), font, 0.5, (0, 255, 0), 1)
         
-        # Start timer when PPE is first detected
-        if ppe_check_start is None and ppe_ok:
-            print("🟡 Required PPE detected. Verifying...")
-            ppe_check_start = time.time()
-            speak("PPE detected. Verifying all required equipment.")
+        # Show timer (always show, regardless of PPE status)
+        remaining = window_duration - elapsed
+        cv2.putText(frame, f"Time remaining: {remaining:.1f}s", (30, 110), 
+                   font, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
         
-        elif ppe_check_start is not None:
-            elapsed = time.time() - ppe_check_start
-            
+        # Show success message if PPE is detected before time expires
+        if ppe_ok and elapsed < window_duration:
+            cv2.putText(frame, "✅ PPE Detected! Holding...", (30, 150), 
+                       font, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+        
+        # Check if time is up
+        if elapsed >= window_duration:
             if ppe_ok:
-                # SUCCESS: All PPE detected and maintained
+                # SUCCESS: All PPE detected within time window
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
                 log_dir = os.path.join(os.path.dirname(__file__), 'logs')
                 os.makedirs(log_dir, exist_ok=True)
@@ -213,6 +228,9 @@ while True:
                                f"PPE Complete - Detected: {detected}", 
                                current_card_uid, 
                                current_user_name)
+                
+                # Log photo path to Firebase
+                log_ppe_photo_to_firebase(filename, current_card_uid, current_user_name, 'PPE_APPROVED')
                 
                 # Send signal to Arduino to grant access
                 send_to_arduino('1')
@@ -229,40 +247,50 @@ while True:
                 current_card_uid = None
                 current_user_name = None
                 ppe_check_start = None
+                ppe_retry_count = 0
                 speak("System ready. Please tap your card for next user.")
                 
-            elif elapsed >= window_duration:
-                # FAILURE: Could not verify all PPE within time window
-                print("❌ PPE CHECK FAILED - Missing required equipment")
+            else:
+                # FAILURE: Time's up but PPE not detected
+                ppe_retry_count += 1
+                print(f"❌ PPE CHECK FAILED - Attempt {ppe_retry_count}/2 - Missing: {missing_ppe}")
                 
-                # Log PPE failure to Firebase
-                log_to_firebase('PPE_REJECTED', 
-                               f"Missing PPE: {missing_ppe} - Detected: {detected}", 
-                               current_card_uid, 
-                               current_user_name)
-                
-                # Send signal to Arduino to deny access
-                send_to_arduino('0')
-                
-                # Voice warning
-                speak("PPE check failed. Access denied. Please ensure you have your helmet and safety vest.")
-                print(f"❌ ACCESS DENIED - {current_user_name} - Missing: {missing_ppe}")
-                
-                # Wait 3 seconds, then reset for next user
-                time.sleep(3)
-                
-                # Reset everything
-                state = STATE_WAITING_FOR_RFID
-                current_card_uid = None
-                current_user_name = None
-                ppe_check_start = None
-                speak("System ready. Please tap your card for next user.")
-        
-        # Show timer if verification is active
-        if ppe_check_start:
-            remaining = window_duration - (time.time() - ppe_check_start)
-            cv2.putText(frame, f"Verifying: {remaining:.1f}s", (30, 110), 
-                       font, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
+                if ppe_retry_count < 2:
+                    # GIVE SECOND CHANCE
+                    print(f"⚠️ SECOND CHANCE - {current_user_name}")
+                    speak(f"PPE check failed on attempt {ppe_retry_count}. You have one more chance. Please reposition and try again.")
+                    
+                    # Wait 2 seconds, then go back to reposition
+                    time.sleep(2)
+                    state = STATE_WAITING_FOR_PERSON
+                    ppe_check_start = None
+                    
+                else:
+                    # FINAL REJECTION - Both chances used
+                    print(f"❌ ACCESS DENIED - {current_user_name} - Missing: {missing_ppe} (All attempts exhausted)")
+                    
+                    # Log final PPE rejection to Firebase
+                    log_to_firebase('PPE_REJECTED', 
+                                   f"PPE Rejected (Both attempts failed) - Missing: {missing_ppe}", 
+                                   current_card_uid, 
+                                   current_user_name)
+                    
+                    # Send signal to Arduino to deny access
+                    send_to_arduino('0')
+                    
+                    # Voice warning
+                    speak("PPE check failed on final attempt. Access denied. Please ensure you have your safety vest.")
+                    
+                    # Wait 3 seconds, then reset for next user
+                    time.sleep(3)
+                    
+                    # Reset everything
+                    state = STATE_WAITING_FOR_RFID
+                    current_card_uid = None
+                    current_user_name = None
+                    ppe_check_start = None
+                    ppe_retry_count = 0
+                    speak("System ready. Please tap your card for next user.")
 
     # Show YOLO detection overlay
     pred_plot = pred.plot()

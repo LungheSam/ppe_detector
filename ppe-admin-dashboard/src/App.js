@@ -10,8 +10,12 @@ import {
   Legend, ResponsiveContainer
 } from 'recharts';
 import './App.css';
+import { photoService } from './services/photoServices';  // Import the photo service
 
 function App() {
+  const [localPhotos, setLocalPhotos] = useState([]);  // For Flask photos
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+
   const [logs, setLogs] = useState([]);
   const [registeredCards, setRegisteredCards] = useState([]);
   const [ppePhotos, setPpePhotos] = useState([]);
@@ -42,9 +46,7 @@ function App() {
   });
 
   // Fetch data from Firebase
-  useEffect(() => {
-    fetchData();
-  }, []);
+
 
   const fetchData = () => {
     setLoading(true);
@@ -64,70 +66,60 @@ function App() {
       }));
     });
 
-    // Fetch access logs with PPE details
-    const logsRef = ref(database, 'access_logs');
-    const unsubscribeLogs = onValue(logsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const logsList = Object.keys(data).map(key => ({
-          id: key,
-          ...data[key]
-        })).reverse();
-        
-        setLogs(logsList);
-        
-        // Calculate stats
-        const today = new Date().toISOString().split('T')[0];
-        const todayLogs = logsList.filter(log => log.date === today);
-        const approved = logsList.filter(log => log.status === 'PPE_APPROVED');
-        const rejected = logsList.filter(log => log.status === 'PPE_REJECTED');
-        
-        // Calculate weekly data
-        const weeklyData = [];
-        for (let i = 6; i >= 0; i--) {
-          const date = new Date();
-          date.setDate(date.getDate() - i);
-          const dateStr = date.toISOString().split('T')[0];
-          const dayLogs = logsList.filter(log => log.date === dateStr);
-          weeklyData.push({
-            day: date.toLocaleDateString('en-US', { weekday: 'short' }),
-            approved: dayLogs.filter(log => log.status === 'PPE_APPROVED').length,
-            rejected: dayLogs.filter(log => log.status === 'PPE_REJECTED').length
-          });
-        }
-        
-        const complianceRate = logsList.length > 0 
-          ? ((approved.length / logsList.length) * 100).toFixed(1)
-          : 0;
-        
-        setStats(prev => ({
-          ...prev,
-          totalAccess: logsList.length,
-          approvedAccess: approved.length,
-          rejectedAccess: rejected.length,
-          todayAccess: todayLogs.length,
-          weeklyAccess: weeklyData,
-          ppeComplianceRate: complianceRate
-        }));
-      } else {
-        setLogs([]);
+    // Fetch access logs from Firestore
+    const logsQuery = query(collection(firestore, 'access_logs'));
+    const unsubscribeLogs = onSnapshot(logsQuery, (snapshot) => {
+      const logsList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      setLogs(logsList);
+      
+      // Calculate stats
+      const today = new Date().toISOString().split('T')[0];
+      const todayLogs = logsList.filter(log => log.date === today);
+      const approved = logsList.filter(log => log.status === 'PPE_APPROVED');
+      const rejected = logsList.filter(log => log.status === 'PPE_REJECTED');
+      
+      // Calculate weekly data
+      const weeklyData = [];
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        const dayLogs = logsList.filter(log => log.date === dateStr);
+        weeklyData.push({
+          day: date.toLocaleDateString('en-US', { weekday: 'short' }),
+          approved: dayLogs.filter(log => log.status === 'PPE_APPROVED').length,
+          rejected: dayLogs.filter(log => log.status === 'PPE_REJECTED').length
+        });
       }
+      
+      const complianceRate = logsList.length > 0 
+        ? ((approved.length / logsList.length) * 100).toFixed(1)
+        : 0;
+      
+      setStats(prev => ({
+        ...prev,
+        totalAccess: logsList.length,
+        approvedAccess: approved.length,
+        rejectedAccess: rejected.length,
+        todayAccess: todayLogs.length,
+        weeklyAccess: weeklyData,
+        ppeComplianceRate: complianceRate
+      }));
       setLoading(false);
     });
 
-    // Fetch PPE photos
-    const photosRef = ref(database, 'ppe_photos');
-    const unsubscribePhotos = onValue(photosRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const photosList = Object.keys(data).map(key => ({
-          id: key,
-          ...data[key]
-        })).reverse();
-        setPpePhotos(photosList);
-      } else {
-        setPpePhotos([]);
-      }
+    // Fetch PPE photos from Firestore
+    const photosQuery = query(collection(firestore, 'ppe_photos'));
+    const unsubscribePhotos = onSnapshot(photosQuery, (snapshot) => {
+      const photosList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setPpePhotos(photosList);
     });
     
     // Return unsubscribe functions for cleanup
@@ -137,6 +129,35 @@ function App() {
       unsubscribePhotos();
     };
   };
+  // useEffect(() => {
+  //   fetchData();
+  // }, []);
+  const fetchPhotosFromFlask = async () => {
+      setLoadingPhotos(true);
+      try {
+        const flaskPhotos = await photoService.fetchPhotos();
+        setLocalPhotos(flaskPhotos);
+        
+        // Optional: Merge with Firestore photos if you want
+        // For now, we'll use Flask photos for the gallery
+        if (flaskPhotos.length > 0) {
+          console.log(`📸 Loaded ${flaskPhotos.length} photos from Flask backend`);
+        }
+      } catch (error) {
+        console.error('Failed to load photos from Flask:', error);
+      } finally {
+        setLoadingPhotos(false);
+      }
+    };
+  useEffect(() => {
+      fetchData();
+      fetchPhotosFromFlask();  // Add this line
+      
+      // Optional: Refresh photos every 10 seconds
+      const interval = setInterval(fetchPhotosFromFlask, 10000);
+      
+      return () => clearInterval(interval);
+    }, []);
 
   const handleRegisterCard = async () => {
     console.log('🔴 Register card clicked');
@@ -449,11 +470,12 @@ function App() {
                       </span>
                     </td>
                     <td>
-                      {log.image_url && (
+                      {log.status === 'PPE_APPROVED' && ppePhotos.find(p => p.card_uid === log.card_uid && p.date === log.date) && (
                         <button
                           className="btn-icon"
                           onClick={() => {
-                            setSelectedPhoto(log);
+                            const matchingPhoto = ppePhotos.find(p => p.card_uid === log.card_uid && p.date === log.date);
+                            setSelectedPhoto(matchingPhoto);
                             setOpenPhotoModal(true);
                           }}
                         >
@@ -471,41 +493,64 @@ function App() {
 
         {/* Tab 2: PPE Photos Gallery */}
         {tabValue === 1 && (
-          <div className="gallery-section">
-            <h3>📷 PPE Detection Photos Gallery</h3>
-            <p className="section-subtitle">Captured images from PPE compliance checks</p>
-            
-            <div className="gallery-grid">
-              {ppePhotos.map((photo) => (
-                <motion.div
-                  key={photo.id}
-                  className="gallery-item"
-                  whileHover={{ scale: 1.05 }}
-                  onClick={() => {
-                    setSelectedPhoto(photo);
-                    setOpenPhotoModal(true);
-                  }}
-                >
-                  <img
-                    src={photo.image_url || `https://via.placeholder.com/300x300?text=PPE+Photo`}
-                    alt={`PPE Check - ${photo.user_name}`}
-                  />
-                  <div className="gallery-info">
-                    <h4>{photo.user_name}</h4>
-                    <p>{photo.date} {photo.time}</p>
-                    <span className={`status-badge status-${photo.status === 'APPROVED' ? 'success' : 'error'}`}>
-                      {photo.status}
-                    </span>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-            
-            {ppePhotos.length === 0 && (
-              <div className="alert alert-info">ℹ️ No PPE photos available yet</div>
-            )}
+  <div className="gallery-section">
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+      <div>
+        <h3>📷 PPE Detection Photos Gallery</h3>
+        <p className="section-subtitle">Captured images from PPE compliance checks</p>
+      </div>
+      <button 
+        className="btn-refresh" 
+        onClick={fetchPhotosFromFlask}
+        style={{ padding: '8px 16px', fontSize: '0.9rem' }}
+      >
+        🔄 Refresh Photos
+      </button>
+    </div>
+    
+    {loadingPhotos && (
+      <div className="loading-indicator">
+        <p>📸 Loading photos from server...</p>
+      </div>
+    )}
+    
+    <div className="gallery-grid">
+      {!loadingPhotos && localPhotos.map((photo) => (
+        <motion.div
+          key={photo.id}
+          className="gallery-item"
+          whileHover={{ scale: 1.05 }}
+          onClick={() => {
+            setSelectedPhoto(photo);
+            setOpenPhotoModal(true);
+          }}
+        >
+          <img
+            src={photo.image_url}
+            alt={`PPE Check - ${photo.user_name}`}
+            onError={(e) => {
+              e.target.src = 'https://via.placeholder.com/300x300?text=Image+Not+Found';
+              console.error(`Failed to load: ${photo.image_url}`);
+            }}
+          />
+          <div className="gallery-info">
+            <h4>{photo.user_name}</h4>
+            <p>{photo.date} {photo.time}</p>
+            <span className="status-badge status-success">
+              ✓ PPE Passed
+            </span>
           </div>
-        )}
+        </motion.div>
+      ))}
+    </div>
+    
+    {!loadingPhotos && localPhotos.length === 0 && (
+      <div className="alert alert-info">
+        ℹ️ No PPE photos available yet. Capture some PPE checks to see images here.
+      </div>
+    )}
+  </div>
+)}
 
         {/* Tab 3: Registered Cards */}
         {tabValue === 2 && (
@@ -666,7 +711,7 @@ function App() {
                   ✕
                 </button>
                 <img
-                  src={selectedPhoto.image_url || `https://via.placeholder.com/800x600?text=PPE+Photo`}
+                  src={selectedPhoto.file_path ? `file://${selectedPhoto.file_path}` : (selectedPhoto.image_url || `https://via.placeholder.com/800x600?text=PPE+Photo`)}
                   alt="PPE Check"
                   className="modal-image"
                 />

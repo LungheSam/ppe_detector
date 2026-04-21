@@ -48,3 +48,34 @@ def log_to_firebase(status, details="", card_uid=None, user_name=None):
     except Exception as e:
         print(f"[FIREBASE ERROR] Failed to log: {e}")
         return False
+
+def log_ppe_photo_to_firebase(file_path, card_uid, user_name, status='PPE_APPROVED'):
+    """
+    Log PPE photo to Firestore with file path reference
+    file_path: local path to the saved photo
+    card_uid: RFID card UID
+    user_name: User name
+    status: 'PPE_APPROVED' or 'PPE_REJECTED'
+    """
+    try:
+        if not db:
+            print("[FIREBASE ERROR] Firestore client not initialized")
+            return False
+        
+        photo_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'time': datetime.now().strftime('%H:%M:%S'),
+            'file_path': file_path,
+            'card_uid': card_uid,
+            'user_name': user_name,
+            'status': status
+        }
+        
+        # Add document to 'ppe_photos' collection
+        db.collection('ppe_photos').add(photo_entry)
+        print(f"[FIREBASE] Photo logged: {file_path}")
+        return True
+    except Exception as e:
+        print(f"[FIREBASE ERROR] Failed to log photo: {e}")
+        return False
